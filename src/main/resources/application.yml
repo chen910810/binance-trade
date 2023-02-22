@@ -1,0 +1,32 @@
+server:
+  port: 80
+  servlet:
+    session:
+      timeout: 86400
+      cookie:
+        max-age: 12h
+  tomcat:
+    uri-encoding: UTF-8
+spring:
+  jackson:
+    time-zone: GMT+8
+    date-format: yyyy-MM-dd HH:mm:ss
+  freemarker:
+    cache: false #关闭页面缓存
+    request-context-attribute: ctx
+  profiles:
+    active: dev
+  servlet:
+    multipart:
+      max-file-size: 100MB
+logging:
+  file:
+    name: ./logs/binance-trade.log
+  level:
+    root: error
+    com.binance.quantify: debug
+    com.binance.quantify.dao: error
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true
+  mapper-locations: classpath:mappers/*Mapper.xml
