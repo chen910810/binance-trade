@@ -66,6 +66,15 @@ public interface BinanceOrderDao {
             "<if test=\"closeMessage != null \">" +
             " close_message = #{closeMessage} ," +
             "</if>" +
+            "<if test=\"openTradeMessage != null \">" +
+            " open_trade_message = #{openTradeMessage} ," +
+            "</if>" +
+            "<if test=\"closeTradeMessage != null \">" +
+            " close_trade_message = #{closeTradeMessage} ," +
+            "</if>" +
+            "<if test=\"cancelMessage != null \">" +
+            " cancel_message = #{cancelMessage} ," +
+            "</if>" +
             "<if test=\"updateTime != null \">" +
             " update_time = #{updateTime} " +
             "</if>" +
@@ -77,7 +86,16 @@ public interface BinanceOrderDao {
             "symbol = #{symbol} AND side = #{side} AND bn_order_id = #{bnOrderId}")
     BinanceOrderDo getBinanceOrderByOrderId(String orderId,Integer memberId,Integer status,String symbol,String side,String bnOrderId);
 
-    @Select("SELECT * FROM bo_order WHERE member_id = #{memberId} AND symbol = #{symbol} AND `status` = #{status} AND side = #{side} AND price >= #{price} ORDER BY price DESC LIMIT 1 ")
+    @Select("<script>" +
+            " SELECT * FROM bo_order WHERE member_id = #{memberId} AND symbol = #{symbol} AND `status` = #{status} AND side = #{side} " +
+            "<if test=\"status == 0 \">" +
+            "AND price &gt;= #{price} " +
+            "</if>" +
+            "<if test=\"status == 3 \">" +
+            "AND price &lt;= #{price} " +
+            "</if>" +
+            "ORDER BY price DESC LIMIT 1 " +
+            "</script>")
     BinanceOrderDo getBinanceOrderByPrice(Integer memberId, String symbol, String side, BigDecimal price,Integer status);
 
 }

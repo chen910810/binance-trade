@@ -32,7 +32,7 @@ public class SystemAutoSellOrderProcess {
     private RedisTemplate db10RedisTemplate;
 
     @Async
-    @BALock
+    //@BALock
     public void processActiveSellOrderJob(BinanceMemberConfig memberConfig){
         String symbol = memberConfig.getSymbol().toUpperCase();
         Integer memberId = memberConfig.getMemberId();
@@ -63,9 +63,12 @@ public class SystemAutoSellOrderProcess {
             if(status.equalsIgnoreCase("FILLED")){
                 //成交
                 BinanceOrderDo newOrder = new BinanceOrderDo();
-                newOrder.setProfit(openOrderJson.getBigDecimal("price").subtract(binanceOrder.getPrice()));
+                BigDecimal closePrice = openOrderJson.getBigDecimal("price");
+                newOrder.setProfit(closePrice.multiply(executedQty).subtract(binanceOrder.getTradeAmount()));
+                newOrder.setCloseFee(BigDecimal.ZERO);
                 newOrder.setStatus(4);
                 newOrder.setCloseAvgPrice(openOrderJson.getBigDecimal("price"));
+                newOrder.setCloseTradeMessage(openOrderJson.toJSONString());
                 newOrder.setUpdateTime(new Date());
                 newOrder.setOrderId(binanceOrder.getOrderId());
                 newOrder.setMemberId(memberId);

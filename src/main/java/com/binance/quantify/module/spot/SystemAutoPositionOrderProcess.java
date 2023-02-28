@@ -35,7 +35,7 @@ public class SystemAutoPositionOrderProcess {
     private RedisTemplate db10RedisTemplate;
 
     @Async
-    @BALock
+    //@BALock
     public void processActivePositionOrderJob(BinanceMemberConfig memberConfig){
         String symbol = memberConfig.getSymbol().toUpperCase();
         Integer memberId = memberConfig.getMemberId();
@@ -66,13 +66,17 @@ public class SystemAutoPositionOrderProcess {
             if(status.equalsIgnoreCase("FILLED") && executedQty.compareTo(binanceOrder.getConsignVolume()) > -1){
 
                 BigDecimal cummulativeQuoteQty = openOrderJson.getBigDecimal("cummulativeQuoteQty");
+                long time = openOrderJson.getLong("time");
                 //成交
                 BinanceOrderDo newOrder = new BinanceOrderDo();
+                newOrder.setTradeDate(new Date(time));
                 newOrder.setTradeVolume(executedQty);
                 newOrder.setTradeAmount(cummulativeQuoteQty);
                 newOrder.setTradeAvgPrice(openOrderJson.getBigDecimal("price"));
+                newOrder.setOpenFee(BigDecimal.ZERO);
                 newOrder.setStatus(1);
                 newOrder.setUpdateTime(new Date());
+                newOrder.setOpenTradeMessage(openOrderJson.toJSONString());
                 newOrder.setOrderId(openOrderJson.getString("clientOrderId"));
                 newOrder.setMemberId(memberId);
                 newOrder.setSymbol(symbol);

@@ -35,7 +35,7 @@ public class SystemAutoOpenTradeProcess {
     private RedisTemplate db2RedisTemplate;
 
     @Async
-    @BALock
+    //@BALock
     public void processActiveMemberOpenJob(BinanceMemberConfig memberConfig){
         String symbol = memberConfig.getSymbol().toUpperCase();
         Integer memberId = memberConfig.getMemberId();
@@ -71,7 +71,8 @@ public class SystemAutoOpenTradeProcess {
             }else{ //检测是否需要取消旧的挂单
                 needOrder = false;
                 log.debug("不满足开仓条件, 当前系统累计挂单量 {} , 系统维护最大挂单量 {} ",totalAmount,memberConfig.getPositionMaxNumber());
-                checkOldOrder(currentNewPrice,memberConfig);
+                orderPrice = getOrderPrice(priceList,currentNewPrice,memberConfig);
+                checkOldOrder(orderPrice,memberConfig);
             }
         }
         if(needOrder && orderPrice.compareTo(BigDecimal.ZERO) > 0){
@@ -96,13 +97,16 @@ public class SystemAutoOpenTradeProcess {
             }
             memberConfig.setConsignAmount(consignAmount);//单笔下单金额
             //单笔下单量
-            memberConfig.setConsignVolume(consignAmount.divide(orderPrice,6, BigDecimal.ROUND_HALF_UP));
+            BigDecimal consignVolume = consignAmount.divide(orderPrice,6, BigDecimal.ROUND_HALF_UP);
+            //检测下单数量
+            consignVolume = checkTradeVolume(consignVolume);
+            memberConfig.setConsignVolume(consignVolume);
             //建仓
             openTradeOrder(orderPrice,memberConfig);
         }
     }
     //检测是否需要取消旧的挂单
-    private void checkOldOrder(BigDecimal currentNewPrice,BinanceMemberConfig memberConfig){
+    private void checkOldOrder(BigDecimal orderPrice,BinanceMemberConfig memberConfig){
         //获取所有挂单
         JSONObject orderParamJson = BinanceTradeServiceUtils.getDefaultPostData();
         orderParamJson.put("symbol",memberConfig.getSymbol());
@@ -112,57 +116,62 @@ public class SystemAutoOpenTradeProcess {
         if(CollectionUtils.isEmpty(openOrderResultList)){
            return;
         }
-        Optional<BinanceOpenOrderResult> minPriceOrderInfoOptional = openOrderResultList.stream().min(Comparator.comparing(BinanceOpenOrderResult::getPrice));
-        Optional<BinanceOpenOrderResult> maxPriceOrderInfoOptional = openOrderResultList.stream().max(Comparator.comparing(BinanceOpenOrderResult::getPrice));
-        if (minPriceOrderInfoOptional.isPresent() && maxPriceOrderInfoOptional.isPresent()) {
-            BigDecimal maxPrice = maxPriceOrderInfoOptional.get().getPrice();
-            if(maxPrice.add(memberConfig.getTradeStep()).compareTo(currentNewPrice) > -1){
-                log.debug("....当前没有可取消订单....");
-                return;
-            }
-            //取消最小价格的挂单
-            Integer orderId = minPriceOrderInfoOptional.get().getOrderId();
-            String newClientOrderId = minPriceOrderInfoOptional.get().getClientOrderId();
-            String symbol = minPriceOrderInfoOptional.get().getSymbol();
-            String side = minPriceOrderInfoOptional.get().getSide();
-            BigDecimal cummulativeQuoteQty = minPriceOrderInfoOptional.get().getCummulativeQuoteQty();
-            if(cummulativeQuoteQty.compareTo(BigDecimal.ZERO) > 0)
-                return;
-            orderParamJson.put("orderId",orderId);
-            orderParamJson.put("newClientOrderId",newClientOrderId);
-            String revokeOrderParamDataStr = BinanceTradeServiceUtils.getQueryStr(orderParamJson);
-            JSONObject resultJson = binanceTradeClientService.revokeOpenOrder(memberConfig.getMemberId(), BinanceConstants.API_ORDER, revokeOrderParamDataStr);
-            if(ObjectUtils.isEmpty(resultJson)){
-                log.debug("revoke order 撤销订单失败!");
-                return;
-            }else if(resultJson.containsKey("orderId")){
-                //撤销订单结果
-                if(resultJson.getString("status").equalsIgnoreCase("CANCELED")){ //撤销成功
+        BinanceOpenOrderResult minBinanceOpenOrderResult = openOrderResultList.stream().min(Comparator.comparing(BinanceOpenOrderResult::getPrice)).get();
+        log.debug("最小价格 {} , 订单ID {} , 币安订单ID {} ",minBinanceOpenOrderResult.getPrice(),minBinanceOpenOrderResult.getClientOrderId(),minBinanceOpenOrderResult.getOrderId());
+        if(ObjectUtils.isEmpty(minBinanceOpenOrderResult)){
+            return;
+        }
+        if(orderPrice.compareTo(minBinanceOpenOrderResult.getPrice().add(memberConfig.getTradeStep())) < 0){
+            log.debug("检测是否需要旧的挂单.......最小挂单价格和当前需要挂单的价格 {} ",orderPrice);
+            return;
+        }
 
-                    BinanceOrderDo binanceOrder = binanceOrderService.getBinanceOrderByOrderId(newClientOrderId, memberConfig.getMemberId(), 0,
-                            symbol, side, orderId + "");
-                    if(ObjectUtils.isEmpty(binanceOrder)){
-                        log.debug(".......根据查询的挂单列表，没从系统检测出挂单的订单............");
-                        return;
-                    }
-                    BinanceOrderDo canceledOrder = new BinanceOrderDo();
-                    canceledOrder.setUpdateTime(new Date());
-                    canceledOrder.setPrice(BigDecimal.ZERO);
-                    canceledOrder.setTradeVolume(BigDecimal.ZERO);
-                    canceledOrder.setTradeAmount(BigDecimal.ZERO);
-                    canceledOrder.setStatus(2);
-                    canceledOrder.setOrderId(binanceOrder.getOrderId());
-                    canceledOrder.setStatusTag(0);
-                    canceledOrder.setMemberId(memberConfig.getMemberId());
-                    canceledOrder.setSymbol(symbol);
-                    binanceOrderService.updateBinanceOrderDo(canceledOrder);
-                    //remove 缓存价格
-                    removeCacheRedisSymbolPrice(memberConfig.getMemberId(),binanceOrder.getPrice(),binanceOrder.getSymbol());
-                    //缓存减去累计开仓量
-                    cacheSubRedisSymbolAmount(memberConfig.getMemberId(),binanceOrder.getConsignAmount(),binanceOrder.getSymbol());
+        //取消最小价格的挂单
+        String orderId = minBinanceOpenOrderResult.getOrderId();
+        String newClientOrderId = minBinanceOpenOrderResult.getClientOrderId();
+        String symbol = minBinanceOpenOrderResult.getSymbol();
+        String side = minBinanceOpenOrderResult.getSide();
+        BigDecimal cummulativeQuoteQty = minBinanceOpenOrderResult.getCummulativeQuoteQty();
+        if(cummulativeQuoteQty.compareTo(BigDecimal.ZERO) > 0)
+            return;
+        orderParamJson.put("orderId",orderId);
+        orderParamJson.put("newClientOrderId",newClientOrderId);
+        String revokeOrderParamDataStr = BinanceTradeServiceUtils.getQueryStr(orderParamJson);
+        JSONObject resultJson = binanceTradeClientService.revokeOpenOrder(memberConfig.getMemberId(), BinanceConstants.API_ORDER, revokeOrderParamDataStr);
+        if(ObjectUtils.isEmpty(resultJson)){
+            log.debug("revoke order 撤销订单失败!");
+            return;
+        }else if(resultJson.containsKey("orderId")){
+            //撤销订单结果
+            if(resultJson.getString("status").equalsIgnoreCase("CANCELED")){ //撤销成功
+
+                BinanceOrderDo binanceOrder = binanceOrderService.getBinanceOrderByOrderId(newClientOrderId, memberConfig.getMemberId(), 0,
+                        symbol, side, orderId);
+                if(ObjectUtils.isEmpty(binanceOrder)){
+                    log.debug(".......根据查询的挂单列表，没从系统检测出挂单的订单............");
+                    return;
                 }
+                BinanceOrderDo canceledOrder = new BinanceOrderDo();
+                canceledOrder.setUpdateTime(new Date());
+                canceledOrder.setPrice(BigDecimal.ZERO);
+                canceledOrder.setTradeVolume(BigDecimal.ZERO);
+                canceledOrder.setTradeAmount(BigDecimal.ZERO);
+                canceledOrder.setOpenFee(BigDecimal.ZERO);
+                canceledOrder.setProfit(BigDecimal.ZERO);
+                canceledOrder.setStatus(2);
+                canceledOrder.setCancelMessage(resultJson.toJSONString());
+                canceledOrder.setOrderId(binanceOrder.getOrderId());
+                canceledOrder.setStatusTag(0);
+                canceledOrder.setMemberId(memberConfig.getMemberId());
+                canceledOrder.setSymbol(symbol);
+                binanceOrderService.updateBinanceOrderDo(canceledOrder);
+                //remove 缓存价格
+                removeCacheRedisSymbolPrice(memberConfig.getMemberId(),binanceOrder.getPrice(),binanceOrder.getSymbol());
+                //缓存减去累计开仓量
+                cacheSubRedisSymbolAmount(memberConfig.getMemberId(),binanceOrder.getConsignAmount(),binanceOrder.getSymbol());
             }
         }
+
     }
 
     //调用币安API创建订单
@@ -214,7 +223,10 @@ public class SystemAutoOpenTradeProcess {
         //缓存挂单价格、及持仓的价格
         cacheRedisSymbolPrice(memberConfig.getMemberId(),sendOrderResult.getBigDecimal("price"),memberConfig.getSymbol().toUpperCase());
         //是否为预开仓订单
-        cacheRedisSymbolExpected(memberConfig);
+        if(memberConfig.getExpectedFlag().equals(1)){
+            cacheRedisSymbolExpected(memberConfig);
+        }
+
     }
     //是否为预开仓订单
     private void cacheRedisSymbolExpected(BinanceMemberConfig memberConfig){
@@ -295,6 +307,14 @@ public class SystemAutoOpenTradeProcess {
             }
         }
         return resultPrice;
+    }
+
+    //检测下单数量
+    private BigDecimal checkTradeVolume(BigDecimal consignVolume){
+        BigDecimal stepSize = new BigDecimal("0.00000100");
+        BigDecimal divide = consignVolume.divide(stepSize, 0, BigDecimal.ROUND_DOWN);
+        BigDecimal tradeVolume = divide.multiply(stepSize);
+        return tradeVolume.setScale(5,BigDecimal.ROUND_DOWN);
     }
 
 }

@@ -29,6 +29,8 @@ public class BinanceMemberConfig implements Serializable {
    * 是否托管,0:关闭, 1:启动
    */
   private Integer isActive;
+
+  private Integer isPosition;
   /**
    * 下单加仓步长 (USD)
    */

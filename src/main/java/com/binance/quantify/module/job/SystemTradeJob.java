@@ -46,7 +46,7 @@ public class SystemTradeJob {
         if(CollectionUtils.isEmpty(autoTradeInfo)){
             return;
         }
-        List<BinanceMemberConfig> activeMember = autoTradeInfo.stream().filter(item -> item.getIsActive() == 1 && item.getProfitModel() == 1).collect(Collectors.toList());
+        List<BinanceMemberConfig> activeMember = autoTradeInfo.stream().filter(item -> item.getIsActive() == 1).collect(Collectors.toList());
         activeMember.forEach(memberConfig->systemAutoOpenTradeProcess.processActiveMemberOpenJob(memberConfig));
     }
 
@@ -57,7 +57,7 @@ public class SystemTradeJob {
         if(CollectionUtils.isEmpty(autoTradeInfo)){
             return;
         }
-        List<BinanceMemberConfig> activeMember = autoTradeInfo.stream().filter(item -> item.getIsActive() == 1 && item.getProfitModel() == 1).collect(Collectors.toList());
+        List<BinanceMemberConfig> activeMember = autoTradeInfo.stream().filter(item -> item.getIsPosition() == 1).collect(Collectors.toList());
         activeMember.forEach(memberConfig->systemAutoPositionOrderProcess.processActivePositionOrderJob(memberConfig));
     }
 
@@ -68,7 +68,7 @@ public class SystemTradeJob {
         if(CollectionUtils.isEmpty(autoTradeInfo)){
             return;
         }
-        List<BinanceMemberConfig> activeMember = autoTradeInfo.stream().filter(item -> item.getIsActive() == 1 && item.getProfitModel() == 1).collect(Collectors.toList());
+        List<BinanceMemberConfig> activeMember = autoTradeInfo.stream().filter(item -> item.getIsPosition() == 1).collect(Collectors.toList());
         activeMember.forEach(memberConfig->systemAutoSellOrderProcess.processActiveSellOrderJob(memberConfig));
     }
 

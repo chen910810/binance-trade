@@ -10,7 +10,7 @@ import javax.annotation.Resource;
 @Component
 public class BinanceClientConfig {
 
-    @Value("${binance-client.test-spot-api-url}")
+    @Value("${binance-client.spot-api-url}")
     private String BINANCE_SPOT_URL;
 
     @Resource

@@ -1,14 +1,17 @@
 package com.binance.quantify.module.spot.result;
 
 import lombok.Data;
+import lombok.ToString;
+
 import java.math.BigDecimal;
 
+@ToString
 @Data
 public class BinanceOpenOrderResult {
 
     private String symbol;
 
-    private Integer orderId;
+    private String orderId;
 
     private Integer orderListId;
 

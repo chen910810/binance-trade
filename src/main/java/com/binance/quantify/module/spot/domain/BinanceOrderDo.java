@@ -65,10 +65,16 @@ public class BinanceOrderDo {
     private Date updateTime;
     //开仓反馈消息
     private String openMessage;
+    //开仓成交反馈消息
+    private String openTradeMessage;
     //平仓反馈消息
     private String closeMessage;
+    //平仓成交反馈消息
+    private String closeTradeMessage;
     //当前订单是否为预开仓订单
     private Integer expectedFlag;
+    //取消订单反馈消息
+    private String cancelMessage;
 
     //虚拟字段
     private Integer statusTag;
