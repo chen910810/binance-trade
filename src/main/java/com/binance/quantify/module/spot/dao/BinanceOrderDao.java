@@ -83,8 +83,8 @@ public interface BinanceOrderDao {
     void updateBinanceOrderDo(BinanceOrderDo binanceOrderDo);
 
     @Select("SELECT * FROM bo_order WHERE order_id = #{orderId} AND member_id = #{memberId} AND `status` = #{status} AND " +
-            "symbol = #{symbol} AND side = #{side} AND bn_order_id = #{bnOrderId}")
-    BinanceOrderDo getBinanceOrderByOrderId(String orderId,Integer memberId,Integer status,String symbol,String side,String bnOrderId);
+            "symbol = #{symbol} AND bn_order_id = #{bnOrderId}")
+    BinanceOrderDo getBinanceOrderByOrderId(String orderId,Integer memberId,Integer status,String symbol,String bnOrderId);
 
     @Select("<script>" +
             " SELECT * FROM bo_order WHERE member_id = #{memberId} AND symbol = #{symbol} AND `status` = #{status} AND side = #{side} " +
@@ -97,5 +97,11 @@ public interface BinanceOrderDao {
             "ORDER BY price DESC LIMIT 1 " +
             "</script>")
     BinanceOrderDo getBinanceOrderByPrice(Integer memberId, String symbol, String side, BigDecimal price,Integer status);
+
+    @Select("SELECT * FROM bo_order WHERE member_id = #{memberId} AND symbol = #{symbol} AND side = #{side} AND price >= #{price} AND `status` = #{status} ORDER BY price ASC")
+    BinanceOrderDo getBinanceOrderLimt(Integer memberId, String symbol, String side, BigDecimal price,Integer status);
+
+    @Select("SELECT * FROM bo_order WHERE position_order_id = #{positionOrderId} AND close_order_id = #{closeBnOrderId} AND member_id = #{memberId} AND `status` = #{status} AND symbol = #{symbol} ")
+    BinanceOrderDo getSellBinanceOrder(String positionOrderId,String closeBnOrderId,Integer memberId,Integer status,String symbol);
 
 }

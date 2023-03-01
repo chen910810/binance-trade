@@ -22,6 +22,7 @@ import org.springframework.util.ObjectUtils;
 import javax.annotation.Resource;
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Log4j2
 @Component
@@ -61,6 +62,8 @@ public class SystemAutoOpenTradeProcess {
         BigDecimal orderPrice = currentNewPrice;
         //是否开仓
         boolean needOrder = true;
+        //获取当前所有挂单集合
+        List<BinanceOpenOrderResult> openOrderResultList = getOpenOrders(memberConfig);
         //获取挂单价格集合
         String PRICE_REDIS_KEY = String.format(BinanceConstants.BN_SYMBOL_CONSIGN_PRICE,memberId,symbol);
         Set priceSet = db2RedisTemplate.opsForSet().members(PRICE_REDIS_KEY);
@@ -72,7 +75,7 @@ public class SystemAutoOpenTradeProcess {
                 needOrder = false;
                 log.debug("不满足开仓条件, 当前系统累计挂单量 {} , 系统维护最大挂单量 {} ",totalAmount,memberConfig.getPositionMaxNumber());
                 orderPrice = getOrderPrice(priceList,currentNewPrice,memberConfig);
-                checkOldOrder(orderPrice,memberConfig);
+                checkOldOrder(orderPrice,memberConfig,openOrderResultList);
             }
         }
         if(needOrder && orderPrice.compareTo(BigDecimal.ZERO) > 0){
@@ -101,22 +104,30 @@ public class SystemAutoOpenTradeProcess {
             //检测下单数量
             consignVolume = checkTradeVolume(consignVolume);
             memberConfig.setConsignVolume(consignVolume);
+            //检查挂单数量
+            checkOpenOrderNum(orderPrice,memberConfig,openOrderResultList);
             //建仓
             openTradeOrder(orderPrice,memberConfig);
         }
     }
-    //检测是否需要取消旧的挂单
-    private void checkOldOrder(BigDecimal orderPrice,BinanceMemberConfig memberConfig){
-        //获取所有挂单
+
+    //获取所有挂单
+    private List<BinanceOpenOrderResult> getOpenOrders(BinanceMemberConfig memberConfig){
         JSONObject orderParamJson = BinanceTradeServiceUtils.getDefaultPostData();
         orderParamJson.put("symbol",memberConfig.getSymbol());
         String orderParamDataStr = BinanceTradeServiceUtils.getQueryStr(orderParamJson);
         //获取当前所有的挂单
         List<BinanceOpenOrderResult> openOrderResultList = binanceTradeClientService.getOpenOrders(memberConfig.getMemberId(),BinanceConstants.API_OPEN_ORDERS, orderParamDataStr);
+        return openOrderResultList;
+    }
+
+    //检测是否需要取消旧的挂单
+    private void checkOldOrder(BigDecimal orderPrice,BinanceMemberConfig memberConfig,List<BinanceOpenOrderResult> openOrderResultList){
+        //获取所有挂单
         if(CollectionUtils.isEmpty(openOrderResultList)){
            return;
         }
-        BinanceOpenOrderResult minBinanceOpenOrderResult = openOrderResultList.stream().min(Comparator.comparing(BinanceOpenOrderResult::getPrice)).get();
+        BinanceOpenOrderResult minBinanceOpenOrderResult = openOrderResultList.stream().max(Comparator.comparing(BinanceOpenOrderResult::getOrigQty)).get();
         log.debug("最小价格 {} , 订单ID {} , 币安订单ID {} ",minBinanceOpenOrderResult.getPrice(),minBinanceOpenOrderResult.getClientOrderId(),minBinanceOpenOrderResult.getOrderId());
         if(ObjectUtils.isEmpty(minBinanceOpenOrderResult)){
             return;
@@ -125,15 +136,21 @@ public class SystemAutoOpenTradeProcess {
             log.debug("检测是否需要旧的挂单.......最小挂单价格和当前需要挂单的价格 {} ",orderPrice);
             return;
         }
-
+        doCanceledOrder(minBinanceOpenOrderResult,memberConfig);
+    }
+    //取消挂单
+    private void doCanceledOrder(BinanceOpenOrderResult binanceOpenOrderResult,BinanceMemberConfig memberConfig){
         //取消最小价格的挂单
-        String orderId = minBinanceOpenOrderResult.getOrderId();
-        String newClientOrderId = minBinanceOpenOrderResult.getClientOrderId();
-        String symbol = minBinanceOpenOrderResult.getSymbol();
-        String side = minBinanceOpenOrderResult.getSide();
-        BigDecimal cummulativeQuoteQty = minBinanceOpenOrderResult.getCummulativeQuoteQty();
+        String orderId = binanceOpenOrderResult.getOrderId();
+        String newClientOrderId = binanceOpenOrderResult.getClientOrderId();
+        String symbol = binanceOpenOrderResult.getSymbol();
+        String side = binanceOpenOrderResult.getSide();
+        BigDecimal cummulativeQuoteQty = binanceOpenOrderResult.getCummulativeQuoteQty();
         if(cummulativeQuoteQty.compareTo(BigDecimal.ZERO) > 0)
             return;
+        //获取所有挂单
+        JSONObject orderParamJson = BinanceTradeServiceUtils.getDefaultPostData();
+        orderParamJson.put("symbol",memberConfig.getSymbol());
         orderParamJson.put("orderId",orderId);
         orderParamJson.put("newClientOrderId",newClientOrderId);
         String revokeOrderParamDataStr = BinanceTradeServiceUtils.getQueryStr(orderParamJson);
@@ -146,7 +163,7 @@ public class SystemAutoOpenTradeProcess {
             if(resultJson.getString("status").equalsIgnoreCase("CANCELED")){ //撤销成功
 
                 BinanceOrderDo binanceOrder = binanceOrderService.getBinanceOrderByOrderId(newClientOrderId, memberConfig.getMemberId(), 0,
-                        symbol, side, orderId);
+                        symbol, orderId);
                 if(ObjectUtils.isEmpty(binanceOrder)){
                     log.debug(".......根据查询的挂单列表，没从系统检测出挂单的订单............");
                     return;
@@ -169,11 +186,29 @@ public class SystemAutoOpenTradeProcess {
                 removeCacheRedisSymbolPrice(memberConfig.getMemberId(),binanceOrder.getPrice(),binanceOrder.getSymbol());
                 //缓存减去累计开仓量
                 cacheSubRedisSymbolAmount(memberConfig.getMemberId(),binanceOrder.getConsignAmount(),binanceOrder.getSymbol());
+                if(binanceOrder.getExpectedFlag().equals(1)){
+                    String REDIS_KEY = String.format(BinanceConstants.BN_SYMBOL_EXPECTED_ORDER,memberConfig.getMemberId(),memberConfig.getSymbol());
+                    db2RedisTemplate.delete(REDIS_KEY);
+                }
             }
         }
-
     }
-
+    //检查当前挂单数量
+    private void checkOpenOrderNum(BigDecimal orderPrice,BinanceMemberConfig memberConfig,List<BinanceOpenOrderResult> openOrderResultList){
+        if(!CollectionUtils.isEmpty(openOrderResultList)){
+            List<BinanceOpenOrderResult> buyOpenOrderResult = openOrderResultList.stream().filter(item -> item.getSide().equalsIgnoreCase("BUY")).collect(Collectors.toList());
+            log.debug("检查当前挂单数量 {} ",buyOpenOrderResult.size());
+            if(buyOpenOrderResult.size() >= 80){ //若等于80
+                BinanceOpenOrderResult minBinanceOpenOrderResult = buyOpenOrderResult.stream().min(Comparator.comparing(BinanceOpenOrderResult::getPrice)).get();
+                if(orderPrice.compareTo(minBinanceOpenOrderResult.getPrice()) < 0){
+                    log.debug(" 当前开仓价格若小于最低挂单价格，取消挂单.... ");
+                    return;
+                }
+                //取消挂单
+                doCanceledOrder(minBinanceOpenOrderResult,memberConfig);
+            }
+        }
+    }
     //调用币安API创建订单
     private void openTradeOrder(BigDecimal orderPrice,BinanceMemberConfig memberConfig){
         //生成订单ID

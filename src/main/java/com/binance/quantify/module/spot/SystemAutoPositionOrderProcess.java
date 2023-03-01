@@ -6,6 +6,7 @@ import com.binance.quantify.config.annotation.BALock;
 import com.binance.quantify.module.member.domain.BinanceMemberConfig;
 import com.binance.quantify.module.spot.domain.BinanceOrderDo;
 import com.binance.quantify.module.spot.param.BinanceApiSendOrderParam;
+import com.binance.quantify.module.spot.result.BinanceOpenOrderResult;
 import com.binance.quantify.module.spot.service.BinanceOrderService;
 import com.binance.quantify.module.tradeClient.service.BinanceTradeClientService;
 import com.binance.quantify.utils.BinanceCommonUtil;
@@ -17,9 +18,14 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.util.CollectionUtils;
+
 import javax.annotation.Resource;
 import java.math.BigDecimal;
+import java.util.Comparator;
 import java.util.Date;
+import java.util.List;
+import java.util.stream.Collectors;
 
 @Log4j2
 @Component
@@ -83,12 +89,84 @@ public class SystemAutoPositionOrderProcess {
                 newOrder.setStatusTag(0);
                 binanceOrderService.updateBinanceOrderDo(newOrder);
 
-                binanceOrder = binanceOrderService.getBinanceOrderByOrderId(binanceOrder.getOrderId(),binanceOrder.getMemberId(),1,binanceOrder.getSymbol(),binanceOrder.getSide(),binanceOrder.getBnOrderId());
+                binanceOrder = binanceOrderService.getBinanceOrderByOrderId(binanceOrder.getOrderId(),binanceOrder.getMemberId(),1,binanceOrder.getSymbol(),binanceOrder.getBnOrderId());
                 //去挂单
                 doOrderSell(binanceOrder,memberConfig);
+                //检测卖单挂单数量
+                checkSellOrderNum(memberConfig);
             }
         }
     }
+    //检测卖单挂单数量
+    private void checkSellOrderNum(BinanceMemberConfig memberConfig){
+        List<BinanceOpenOrderResult> sellOrderResult = getOpenOrders(memberConfig);
+        if(!CollectionUtils.isEmpty(sellOrderResult)){
+            List<BinanceOpenOrderResult> sellOpenOrderResult = sellOrderResult.stream().filter(item -> item.getSide().equalsIgnoreCase("SELL")).collect(Collectors.toList());
+            log.debug("检查当前卖单数量 {} ",sellOpenOrderResult.size());
+            if(sellOpenOrderResult.size() >= 80){ //若等于80
+                BinanceOpenOrderResult maxBinanceOpenOrderResult = sellOpenOrderResult.stream().max(Comparator.comparing(BinanceOpenOrderResult::getPrice)).get();
+                //取消挂单
+                doCanceledSellOrder(maxBinanceOpenOrderResult,memberConfig);
+            }else{//去库中检测是否有撤销的卖单
+                BinanceOpenOrderResult maxBinanceOpenOrderResult = sellOpenOrderResult.stream().max(Comparator.comparing(BinanceOpenOrderResult::getPrice)).get();
+                BinanceOrderDo binanceOrderDo = binanceOrderService.getBinanceOrderLimt(memberConfig.getMemberId(), memberConfig.getSymbol(),
+                        memberConfig.getTradeType().toUpperCase(), maxBinanceOpenOrderResult.getPrice().subtract(memberConfig.getTradeStep()), 1);
+                if(ObjectUtils.isNotEmpty(binanceOrderDo)){
+                    log.debug("去库中检测是否有卖单撤销后订单，重新挂单.........................");
+                    //去挂单
+                    doOrderSell(binanceOrderDo,memberConfig);
+                }
+            }
+        }
+    }
+    //取消卖单
+    private void doCanceledSellOrder(BinanceOpenOrderResult maxBinanceOpenOrderResult,BinanceMemberConfig memberConfig){
+        //取消最小价格的挂单
+        String orderId = maxBinanceOpenOrderResult.getOrderId();
+        String newClientOrderId = maxBinanceOpenOrderResult.getClientOrderId();
+        String symbol = maxBinanceOpenOrderResult.getSymbol();
+        BigDecimal cummulativeQuoteQty = maxBinanceOpenOrderResult.getCummulativeQuoteQty();
+        if(cummulativeQuoteQty.compareTo(BigDecimal.ZERO) > 0)
+            return;
+        //获取所有挂单
+        JSONObject orderParamJson = BinanceTradeServiceUtils.getDefaultPostData();
+        orderParamJson.put("symbol",memberConfig.getSymbol());
+        orderParamJson.put("orderId",orderId);
+        orderParamJson.put("newClientOrderId",newClientOrderId);
+        String revokeOrderParamDataStr = BinanceTradeServiceUtils.getQueryStr(orderParamJson);
+        JSONObject resultJson = binanceTradeClientService.revokeOpenOrder(memberConfig.getMemberId(), BinanceConstants.API_ORDER, revokeOrderParamDataStr);
+        if(org.springframework.util.ObjectUtils.isEmpty(resultJson)){
+            log.debug("revoke sell order 撤销订单失败!");
+            return;
+        }else if(resultJson.containsKey("orderId")){
+            //撤销订单结果
+            if(resultJson.getString("status").equalsIgnoreCase("CANCELED")) { //撤销成功
+                BinanceOrderDo sellBinanceOrder = binanceOrderService.getSellBinanceOrder(newClientOrderId, orderId, memberConfig.getMemberId(), 3, symbol);
+                if(ObjectUtils.isNotEmpty(sellBinanceOrder)){
+                    BinanceOrderDo canceledOrder = new BinanceOrderDo();
+                    canceledOrder.setUpdateTime(new Date());
+                    canceledOrder.setStatus(1);
+                    canceledOrder.setOrderId(sellBinanceOrder.getOrderId());
+                    canceledOrder.setMemberId(sellBinanceOrder.getMemberId());
+                    canceledOrder.setSymbol(symbol);
+                    canceledOrder.setStatusTag(0);
+                    binanceOrderService.updateBinanceOrderDo(canceledOrder);
+                    String REDIS_KEY = String.format("%s%s%s",sellBinanceOrder.getOrderId(),sellBinanceOrder.getBnOrderId(),sellBinanceOrder.getMemberId());
+                    db10RedisTemplate.delete(REDIS_KEY);
+                }
+            }
+        }
+    }
+    //获取所有挂单
+    private List<BinanceOpenOrderResult> getOpenOrders(BinanceMemberConfig memberConfig){
+        JSONObject orderParamJson = BinanceTradeServiceUtils.getDefaultPostData();
+        orderParamJson.put("symbol",memberConfig.getSymbol());
+        String orderParamDataStr = BinanceTradeServiceUtils.getQueryStr(orderParamJson);
+        //获取当前所有的挂单
+        List<BinanceOpenOrderResult> openOrderResultList = binanceTradeClientService.getOpenOrders(memberConfig.getMemberId(),BinanceConstants.API_OPEN_ORDERS, orderParamDataStr);
+        return openOrderResultList;
+    }
+
 
     private void doOrderSell(BinanceOrderDo binanceOrder, BinanceMemberConfig memberConfig){
         String REDIS_KEY = String.format("%s%s%s",binanceOrder.getOrderId(),binanceOrder.getBnOrderId(),binanceOrder.getMemberId());

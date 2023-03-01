@@ -10,8 +10,11 @@ public interface BinanceOrderService {
 
     void updateBinanceOrderDo(BinanceOrderDo binanceOrderDo);
 
-    BinanceOrderDo getBinanceOrderByOrderId(String orderId,Integer memberId,Integer status,String symbol,String side,String bnOrderId);
+    BinanceOrderDo getBinanceOrderByOrderId(String orderId,Integer memberId,Integer status,String symbol,String bnOrderId);
 
     BinanceOrderDo getBinanceOrderByPrice(Integer memberId, String symbol, String side, BigDecimal price,Integer status);
 
+    BinanceOrderDo getBinanceOrderLimt(Integer memberId, String symbol, String side, BigDecimal price,Integer status);
+
+    BinanceOrderDo getSellBinanceOrder(String positionOrderId,String closeBnOrderId,Integer memberId,Integer status,String symbol);
 }
